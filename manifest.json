@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 1,
+  "id": "io.github.fbal98.fortivpn",
+  "name": "FortiVPN",
+  "version": "1.0.0",
+  "author": "fbal98",
+  "license": "MIT",
+  "description": "Connect to OpenFortiVPN from the Omarchy bar with token entry and live tunnel metrics.",
+  "homepage": "https://github.com/fbal98/omarchy-fortivpn",
+  "kinds": [
+    "bar-widget"
+  ],
+  "entryPoints": {
+    "barWidget": "Main.qml"
+  },
+  "barWidget": {
+    "displayName": "FortiVPN",
+    "description": "VPN controls, authentication token entry, traffic graphs, and tunnel details.",
+    "category": "Network",
+    "allowMultiple": false,
+    "defaultSection": "right",
+    "defaults": {},
+    "schema": []
+  }
+}
