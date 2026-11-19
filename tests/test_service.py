@@ -11,6 +11,39 @@ class ControllerTests(unittest.TestCase):
         self.assertEqual(vpn.classify_output('Two-factor authentication token: ')[0], 'token')
         self.assertEqual(vpn.classify_output('ERROR: Could not authenticate to gateway.')[0], 'error')
         self.assertEqual(vpn.classify_output('ERROR: Gateway certificate validation failed.')[0], 'error')
+    def test_saml_command_and_safe_browser_url(self):
+        self.assertIn('--saml-login', vpn.COMMAND)
+        self.assertTrue(vpn.matches_profile(vpn.COMMAND[1:]))
+        gateway = {'host': 'vpn.example.org', 'port': '10443'}
+        url = 'https://vpn.example.org:10443/remote/saml/start?redirect=1'
+        self.assertEqual(vpn.saml_url("INFO: Authenticate at '%s'" % url, gateway), url)
+        for bad in [url.replace('https:', 'http:'), url.replace('vpn.example.org', 'evil.example'),
+                    url.replace('10443', '443'), url + '&id=secret',
+                    url.replace('/remote/saml/start', '/remote/saml/auth_id'),
+                    url.replace('vpn.example.org', 'user@vpn.example.org')]:
+            self.assertEqual(vpn.saml_url("Authenticate at '%s'" % bad, gateway), '')
+    def test_saml_failures(self):
+        self.assertIn('8020', vpn.classify_output('Failed to bind socket to port 8020')[1])
+        self.assertEqual(vpn.classify_output('Failed to retrieve SAML cookie from HTTP')[0], 'error')
+    def test_status_never_reuses_stale_login_snapshot(self):
+        self.c.snapshot = {'browserUrl': 'old-url', 'attemptId': 'old-attempt'}
+        self.c.browser_url = ''
+        self.c.attempt_id = 'new-attempt'
+        result = self.c.handle({'action': 'status'})
+        self.assertEqual(result['browserUrl'], '')
+        self.assertEqual(result['attemptId'], 'new-attempt')
+    def test_reconnect_gets_unique_attempt(self):
+        with patch.object(vpn, 'profile', return_value={'host': 'vpn.example.org'}), \
+             patch.object(vpn, 'processes', return_value=[]), \
+             patch.object(vpn, 'ip_json', return_value=[]), \
+             patch.object(vpn.subprocess, 'Popen') as launch, \
+             patch.object(vpn.threading, 'Thread'):
+            self.c.connect()
+            first = self.c.attempt_id
+            launch.return_value.poll.return_value = 0
+            self.c.connect()
+            self.assertTrue(first)
+            self.assertNotEqual(first, self.c.attempt_id)
     def test_token_never_in_process_arguments(self):
         self.c.state='token'; self.c.proc=Mock(); self.c.proc.poll.return_value=None
         self.c.token('654321')

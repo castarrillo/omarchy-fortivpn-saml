@@ -1,4 +1,6 @@
-# FortiVPN for Omarchy
+# FortiVPN SAML for Omarchy
+
+Fork of [fbal98/omarchy-fortivpn](https://github.com/fbal98/omarchy-fortivpn), with browser-based SSO/SAML and MFA support. The original MIT license and attribution are preserved. The plugin ID remains unchanged for compatibility; do not install both variants simultaneously.
 
 Connect to an OpenFortiVPN tunnel from the Omarchy bar. Enter an authentication token in the popup, see when the tunnel is connected, and keep an eye on its traffic.
 
@@ -14,16 +16,18 @@ Connect to an OpenFortiVPN tunnel from the Omarchy bar. Enter an authentication 
 
 Omarchy Quattro with the Quickshell plugin API (`qs.Ui` and `qs.Commons`), Python 3, systemd, `openfortivpn`, `ppp`, and `iproute2`. A Nerd Font supplies the shield icon; Adwaita Sans and JetBrains Mono are preferred for text, with Qt font fallback when unavailable.
 
-This plugin wraps an existing, working password-and-token OpenFortiVPN profile at `/etc/openfortivpn/config`. Configure and test that profile first using OpenFortiVPN's documentation. The file must be root-owned and mode `600`, with the correct gateway, credentials, and certificate validation settings. No VPN configuration is bundled or downloaded.
+This fork uses an existing SAML-capable OpenFortiVPN profile at `/etc/openfortivpn/config`. Configure and test that profile first using OpenFortiVPN's documentation. The file must be root-owned and mode `600`, with the correct gateway and certificate validation settings. No VPN configuration is bundled or downloaded. OpenFortiVPN 1.24.1 or newer with `--saml-login` support is required.
 
-SAML/browser authentication, multiple profiles, and editing saved passwords in the panel are not supported in this release. English token prompts are recognized; the controller launches OpenFortiVPN with `LANG=C`. The requested PPP interface name is `fortivpn0`, which must be free before connecting.
+The controller starts OpenFortiVPN with `--saml-login`. Each connection attempt has its own identifier: the panel opens a new window at the configured HTTPS SAML endpoint and brings it to the foreground. Complete sign-in and MFA there. MFA policy is controlled by the VPN/identity provider; the plugin cannot force a fresh challenge if the provider reuses an existing session. The callback listens on loopback port 8020, so disconnect FortiClient before connecting. OpenFortiVPN 1.24.1 has a short browser-login timeout; retry if authentication expires. No SAML IDs, session cookies, or MFA codes are persisted. Multiple profiles and editing saved passwords in the panel remain unsupported. English token prompts are recognized; the controller launches OpenFortiVPN with `LANG=C`. The requested PPP interface name is `fortivpn0`, which must be free before connecting.
+
+TLS validation remains enabled. If the gateway supplies an incomplete certificate chain, ask the administrator to fix it or configure a verified CA bundle using OpenFortiVPN's `ca-file` setting. No corporate endpoints, credentials, or machine-specific certificate bundles are included.
 
 ## Install
 
 Inspect the repository before enabling it. This is a community plugin, not an official Omarchy or Fortinet product.
 
 ```bash
-omarchy plugin add https://github.com/fbal98/omarchy-fortivpn.git --enable
+omarchy plugin add https://github.com/castarrillo/omarchy-fortivpn-saml.git --enable
 ```
 
 Install the required controller once, from the plugin directory. This command asks for your system password and grants the selected local account control of the fixed VPN profile:
@@ -39,7 +43,7 @@ The standard install command follows the current upstream branch. To inspect a f
 
 ## Use
 
-Click the shield beside your other bar controls, choose **Connect**, enter the current code when the gateway asks for it, and choose **Verify token** or press Enter. The status changes to **Connected** and the shield turns green once OpenFortiVPN reports the tunnel ready and its interface has an IPv4 address.
+Click the shield beside your other bar controls and choose **Connect**. The browser opens automatically for SSO/MFA, including after disconnecting and reconnecting. **Open browser · SSO / MFA** lets you reopen the sign-in page manually while the attempt is active. The status changes to **Connected** and the shield turns green once OpenFortiVPN reports the tunnel ready and its interface has an IPv4 address.
 
 **Disconnect** asks OpenFortiVPN to restore its network settings before exiting. Closing the popup or restarting the bar leaves the background tunnel running. A token request expires after two minutes; reconnect to obtain a fresh request.
 
@@ -92,12 +96,13 @@ Local processes running as the selected account can control this VPN and inspect
 omarchy plugin validate .
 python3 -m unittest discover -s tests -p 'test_service.py' -v
 python3 tests/test_qml_socket.py
+python3 tests/test_qml_saml.py
 bash -n scripts/install-controller.sh scripts/uninstall-controller.sh
 ```
 
 The Python tests use fictional addresses and mocked VPN actions. The Quickshell socket test runs a separate **offscreen test harness**, not a second desktop shell, and checks recovery when its test service appears late. `preview.png` was rendered with fictional data; it is not a desktop screenshot or proof of a live connection.
 
-The controller's token-request flow has been exercised against a live gateway. A completed live connection through this plugin has not yet been verified; there is no claim that mocked tests substitute for that check. Please report platform or authentication-flow compatibility issues without including credentials, tokens, or private endpoint details.
+The SAML flow has established a live tunnel on the development machine. Tests also cover automatic browser opening exactly once per attempt, including reconnects with the same login URL; they do not substitute for testing your own VPN and identity provider. Please report platform or authentication-flow compatibility issues without including credentials, tokens, or private endpoint details.
 
 ## License
 

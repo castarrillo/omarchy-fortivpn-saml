@@ -1,12 +1,12 @@
 {
   "schemaVersion": 1,
   "id": "io.github.fbal98.fortivpn",
-  "name": "FortiVPN",
-  "version": "1.0.0",
-  "author": "fbal98",
+  "name": "FortiVPN SAML",
+  "version": "1.1.0",
+  "author": "castarrillo (fork of fbal98)",
   "license": "MIT",
-  "description": "Connect to OpenFortiVPN from the Omarchy bar with token entry and live tunnel metrics.",
-  "homepage": "https://github.com/fbal98/omarchy-fortivpn",
+  "description": "OpenFortiVPN with automatic browser SSO/SAML, MFA, and live tunnel metrics.",
+  "homepage": "https://github.com/castarrillo/omarchy-fortivpn-saml",
   "kinds": [
     "bar-widget"
   ],

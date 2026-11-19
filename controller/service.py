@@ -1,11 +1,12 @@
 #!/usr/bin/python3
 """Fixed-profile VPN controller. No credentials or raw VPN output are persisted."""
 import argparse, json, os, pathlib, pwd, re, signal, socket, socketserver, stat, struct, subprocess, threading, time
+from urllib.parse import urlsplit
 
 CONFIG = '/etc/openfortivpn/config'
 SOCKET = '/run/fortivpn-panel/control.sock'
 ALLOWED_UID = None
-COMMAND = ['/usr/bin/openfortivpn', '-c', CONFIG, '--pppd-ifname=fortivpn0']
+COMMAND = ['/usr/bin/openfortivpn', '-c', CONFIG, '--pppd-ifname=fortivpn0', '--saml-login']
 
 
 def matches_profile(args):
@@ -16,7 +17,7 @@ def matches_profile(args):
         if arg in ('-c', '--config'):
             if not remaining or remaining.pop(0) != CONFIG:
                 return False
-        elif arg not in ('-v', '-q', '--config=' + CONFIG, '--pppd-ifname=fortivpn0'):
+        elif arg not in ('-v', '-q', '--config=' + CONFIG, '--pppd-ifname=fortivpn0', '--saml-login'):
             return False
     return True
 
@@ -69,11 +70,34 @@ def classify_output(text):
         return 'error', 'The saved VPN password is missing. Update the VPN configuration.'
     if 'certificate validation failed' in low or 'certificate digest mismatch' in low:
         return 'error', 'VPN certificate verification failed. Check the trusted certificate.'
+    if 'failed to bind socket' in low:
+        return 'error', 'SSO port 8020 is in use. Disconnect FortiClient and retry.'
+    if 'failed to retrieve saml' in low or 'failed to receive saml' in low:
+        return 'error', 'Browser sign-in expired or failed. Connect again and complete MFA.'
     if any(s in low for s in ('could not authenticate', 'authentication failed', 'permission denied', 'invalid otp')):
         return 'error', 'Authentication failed. Connect again with a fresh token.'
     if any(s in low for s in ('could not connect', 'connection timed out', 'name or service not known', 'network is unreachable')):
         return 'error', 'Cannot reach the VPN gateway. Check your network and retry.'
     return None
+
+
+def saml_url(text, gateway):
+    """Only expose the configured HTTPS login endpoint, never callback tokens."""
+    match = re.search(r"Authenticate at '(https://[^'\s]{1,2048})'", text)
+    if not match:
+        return ''
+    value = match.group(1)
+    try:
+        url = urlsplit(value)
+        if (url.scheme == 'https' and url.hostname == gateway.get('host')
+                and (url.port or 443) == int(gateway.get('port', '443'))
+                and not url.username and not url.password and not url.fragment
+                and url.path == '/remote/saml/start'
+                and re.fullmatch(r'redirect=1(?:&realm=[A-Za-z0-9%_.~-]*)?', url.query)):
+            return value
+    except ValueError:
+        pass
+    return ''
 
 
 class Controller:
@@ -90,6 +114,8 @@ class Controller:
         self.stop_at = 0
         self.stop_error = ''
         self.ready = False
+        self.browser_url = ''
+        self.attempt_id = ''
         self.snapshot = {'state': 'disconnected', 'message': ''}
         self.gateway = profile()
 
@@ -109,6 +135,8 @@ class Controller:
             self.stop_requested = False
             self.stop_error = ''
             self.ready = False
+            self.browser_url = ''
+            self.attempt_id = str(time.monotonic_ns())
             self.connected_at = 0
             self.previous = None
             self.proc = subprocess.Popen(COMMAND, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
@@ -124,6 +152,13 @@ class Controller:
                 break
             buffer = (buffer + chunk.decode(errors='replace'))[-8192:]
             with self.lock:
+                login = saml_url(buffer, self.gateway)
+                if login and not self.stop_requested:
+                    self.browser_url = login
+                    self.message = 'Complete sign-in and MFA in your browser.'
+                if 'Processing HTTP SAML request' in buffer:
+                    self.browser_url = ''
+                    self.message = 'Verifying sign-in and establishing the VPN tunnel…'
                 if 'Tunnel is up and running' in buffer:
                     self.ready = True
                 result = classify_output(buffer)
@@ -142,6 +177,7 @@ class Controller:
         with self.lock:
             if self.proc is proc:
                 self.ready = False
+                self.browser_url = ''
                 if self.stop_requested:
                     self.state, self.message = ('error', self.stop_error) if self.stop_error else ('disconnected', '')
                 elif self.state != 'error':
@@ -161,6 +197,7 @@ class Controller:
     def disconnect(self):
         with self.lock:
             self.stop_requested = True
+            self.browser_url = ''
             self.stop_at = time.monotonic()
             self.state, self.message = 'disconnecting', 'Disconnecting…'
             for pid in processes():
@@ -201,7 +238,7 @@ class Controller:
                 self.stop_requested = False
                 self.previous = None
                 self.connected_at = 0
-            elif self.state in ('connecting', 'token') and time.monotonic() - self.started > 120:
+            elif self.state in ('connecting', 'token') and time.monotonic() - self.started > (180 if self.browser_url else 120):
                 self.disconnect()
                 self.stop_error = self.message = 'Connection timed out. Connect again with a fresh token.'
             elif self.stop_requested and time.monotonic() - self.stop_at > 15:
@@ -212,7 +249,8 @@ class Controller:
             data = {'state': self.state, 'message': self.message, 'gateway': self.gateway.get('host', ''),
                 'port': self.gateway.get('port', '443'), 'managed': own, 'uptime': 0,
                 'rxRate': 0, 'txRate': 0, 'rx': 0, 'tx': 0, 'errors': 0, 'drops': 0,
-                'interface': '', 'address': '', 'mtu': 0, 'routes': 0, 'dns': ''}
+                'interface': '', 'address': '', 'mtu': 0, 'routes': 0, 'dns': '',
+                'browserUrl': self.browser_url, 'attemptId': self.attempt_id}
             if iface:
                 name = iface['ifname']
                 stats = pathlib.Path('/sys/class/net') / name / 'statistics'
@@ -244,7 +282,8 @@ class Controller:
         elif action == 'token': self.token(request.get('token'))
         elif action != 'status': raise ValueError('Unknown action.')
         with self.lock:
-            return dict(self.snapshot, state=self.state, message=self.message)
+            return dict(self.snapshot, state=self.state, message=self.message,
+                        browserUrl=self.browser_url, attemptId=self.attempt_id)
 
 
 def serve():

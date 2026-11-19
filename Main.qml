@@ -16,6 +16,18 @@ Panel {
 
   property var vpn: ({state: "unavailable"})
   property string requestError: ""
+  property string openedLoginAttempt: ""
+  readonly property string loginLauncher: Qt.resolvedUrl("scripts/open-saml-browser.py").toString().replace(/^file:\/\//, "")
+  function validLogin(login, gateway, port) {
+    var prefix = "https://" + gateway + ":" + String(port || "443") + "/remote/saml/start?redirect=1"
+    return login.indexOf(prefix) === 0 && /^(?:&realm=[A-Za-z0-9%_.~-]*)?$/.test(login.slice(prefix.length))
+  }
+  function openLogin(login) {
+    if (validLogin(login, root.vpn.gateway, root.vpn.port)) {
+      console.info("FortiVPN: opening SSO browser using", root.loginLauncher)
+      Quickshell.execDetached(["/usr/bin/python3", root.loginLauncher, login])
+    }
+  }
   readonly property string uiFont: "Adwaita Sans"
   property bool detailsOpen: false
   property var rxHistory: []
@@ -86,6 +98,13 @@ Panel {
           var next = JSON.parse(data)
           if (next.error) root.requestError = next.error
           root.vpn = next
+          var login = next.browserUrl || ""
+          var attempt = next.attemptId || ""
+          if (next.state === "connecting" && attempt !== "" && attempt !== root.openedLoginAttempt
+              && root.validLogin(login, next.gateway, next.port)) {
+            root.openedLoginAttempt = attempt
+            root.openLogin(login)
+          }
           if (next.state === "connected") {
             root.rxHistory = root.rxHistory.concat([next.rxRate || 0]).slice(-30)
             root.txHistory = root.txHistory.concat([next.txRate || 0]).slice(-30)
@@ -244,6 +263,16 @@ Panel {
             lineHeight: 1.18
             textFormat: Text.PlainText
           }
+        }
+      }
+
+      Action {
+        Layout.fillWidth: true
+        visible: root.vpn.state === "connecting" && !!root.vpn.browserUrl
+        text: "Open browser · SSO / MFA"
+        onClicked: {
+          var login = root.vpn.browserUrl || ""
+          root.openLogin(login)
         }
       }
 
